@@ -1,0 +1,662 @@
+
+         // Definición Parametros de compilación
+         Ctl-opt Option(*srcstmt:*NoDebugIO);
+         Ctl-opt DftActGrp(*No);
+         Ctl-opt ActGrp(*Caller);
+
+         // Prototipos de Procedimientos
+         dcl-pr ADQRNOVMDR ExtPgm;
+             p_Respuesta Char(5);  // Añadir parámetro
+         end-pr;
+
+         dcl-pr Pr_SwAlgoritmo Char(1);  // Definir tipo de retorno
+         end-pr;
+
+         dcl-pr Pr_AlgoritmoNuevo;   // Procedimiento para Algoritmo Nuevo
+         end-pr;
+
+         dcl-pr Pr_AlgoritmoActual;   // Procedimiento para Algoritmo Antiguo
+         end-pr;
+
+         dcl-pr Pr_EscribirError;  // Procedimiento para Escribir Errores
+         end-pr;
+
+         dcl-pr ADQRLOGADQ ExtPgm('ADQRLOGADQ');
+             p1 Char(10);
+             p2 Char(10);
+             p3 Char(2);
+             p4 Char(10000);
+         end-pr;
+         // Prototipo de QMHSNDPM
+         dcl-pr QMHSNDPM ExtPgm('QMHSNDPM');
+             MessageID     Char(7) Const;        // ID del mensaje
+             CallStack     Char(10) Const;       // Nivel de pila de llamada
+             MessageType   Char(10) Const;       // Tipo de mensaje
+             MessageLength Int(10) Const;        // Longitud del mensaje
+             MessageText   Char(70);       // Texto del mensaje
+             MessageKey    Char(4) Const;        // Clave del mensaje
+             MsgSubType    Int(10) Const;        // Subtipo del mensaje
+             ProgramName   Char(10) Const;  // Nombre del programa
+             ErrorCode     Likeds(ErrorCode_T); // Código de error (puede ser *NULL)
+         end-pr;
+
+         // Estructura para el manejo de código de error
+         dcl-ds ErrorCode_T Qualified Template;
+             BytesProv Int(10) Inz(0);       // Número de bytes proporcionados
+             BytesAvail Int(10) Inz(0);      // Número de bytes disponibles
+             ExcpID Char(7);                     // Código de excepción opcional
+             Reserved Char(1);                   // Relleno para alineación
+         end-ds;
+
+         // Definición Parametros del programa
+         dcl-pi ADQRNOVMDR;
+             p_Respuesta Char(5);
+         end-pi;
+
+         // Variables de Trabajo
+         Dcl-s w_IndSQL     char(1) inz('0');
+         Dcl-s w_Respuesta  char(5) inz(*blanks);
+         Dcl-s wtrabajo     char(30);
+         Dcl-s wMensj       char(80);
+         dcl-s wtipcomi     char(1);
+         dcl-s wvalcomis    char(30);
+         dcl-s wtxtsqlerr   char(100) inz(*blanks);
+
+         // Variables de trabajo y configuración del prototipo de QMHSNDPM
+         dcl-s msgID       Char(7)   Inz('CPF9898');
+         dcl-s callStack   Char(10)  Inz('*EXT');
+         dcl-s msgType     Char(10)  Inz('*ESCAPE'); // o '*INFO' según sea necesario
+         dcl-s msgKey      Char(4)   Inz('*');
+         dcl-s msgSubType  Int(10)   Inz(0);
+         dcl-s progName    Char(10)  Inz('*NOPGM');
+         dcl-ds ErrorCode LikeDS(ErrorCode_T);
+         dcl-s MSGCHAR     Char(70)  Inz(''); // Define MSGCHAR con longitud
+
+
+         // Definición de estructura de estado del programa
+         Dcl-DS pgm_stat PSDS;
+             wprogr char(10) POS(1);
+             wjob   char(10) POS(244);
+             wuser  char(10) POS(254);
+             wnum   char(6 ) POS(264);
+         End-DS;
+
+         // Inicio del Programa
+         w_IndSQL = Pr_SwAlgoritmo();
+
+         If w_IndSQL = *blanks; // Verificación de valor vacío
+            MSGCHAR = 'Advertencia: w_IndSQL no está inicializado';
+
+             // Llamada a QMHSNDPM
+            CALLP(E) QMHSNDPM(msgID : callStack : msgType : %LEN(MSGCHAR) :
+                         MSGCHAR : msgKey : msgSubType : progName : ErrorCode);
+
+             w_IndSQL = '0'; // Asigna un valor por defecto
+         EndIf;
+
+         wtrabajo = %trim(wnum) + '/' + %trim(wuser) + '/' + %trim(wjob);
+
+         // Mensaje de diagnóstico para wtrabajo
+         MSGCHAR = 'Valor de wtrabajo: ' + %trim(wtrabajo);
+         CALLP(E) QMHSNDPM(msgID : callStack : msgType : %LEN(MSGCHAR) :
+                      MSGCHAR : msgKey : msgSubType : progName : ErrorCode);
+
+         // Selección entre Algoritmo Nuevo o Antiguo
+         If w_IndSQL = '1';
+            MSGCHAR = 'Ejecuta Algoritmo Nuevo';
+            CALLP(E) QMHSNDPM(msgID : callStack : msgType : %LEN(MSGCHAR) :
+                         MSGCHAR : msgKey : msgSubType : progName : ErrorCode);
+             Pr_AlgoritmoNuevo();
+         Else;
+             MSGCHAR = 'Ejecuta Algoritmo Antiguo';
+             CALLP(E) QMHSNDPM(msgID : callStack : msgType : %LEN(MSGCHAR) :
+                          MSGCHAR : msgKey : msgSubType : progName : ErrorCode);
+             Pr_AlgoritmoActual();
+         EndIf;
+
+         p_Respuesta = w_Respuesta;
+         Return;
+
+         // Algoritmo Nuevo
+         Dcl-proc Pr_AlgoritmoNuevo;
+             Dcl-s w_TpoMsg Char(10) Inz(*Blanks);
+             Dcl-s w_Chkpnt Char(10) Inz(*Blanks);
+             Dcl-s w_Resp Char(2) Inz(*Blanks);
+             Dcl-s w_Msg Char(10000) Inz(*Blanks);
+             Dcl-s w_Error Char(2) Inz(*Blanks);
+             Dcl-s wtxtsqlerr Char(100) Inz(*Blanks);
+
+          // Monitorea valor inicial de w_Respuesta
+          MSGCHAR = 'Valor inicial de w_Respuesta: ' + w_Respuesta;
+          CALLP(E) QMHSNDPM(msgID : callStack : msgType : %LEN(MSGCHAR) :
+                   MSGCHAR : msgKey : msgSubType : progName : ErrorCode);
+
+          //?LLamado al componente de escritura del Log ADQ
+          w_Resp = ' ';
+          w_TpoMsg = '*INFO';
+          w_Chkpnt = 'NH';
+          w_Msg = 'Paso 1: No hay homologaciones para la novedad';
+          ADQRLOGADQ(w_TpoMsg:w_Chkpnt:w_Resp:w_Msg);
+
+          // Enviar mensaje de log después de escribir en ADQRLOGADQ
+           MSGCHAR = 'Log de Algoritmo Nuevo en el paso 1 ejecutado';
+           CALLP(E) QMHSNDPM (msgID: callStack: msgType:
+                              %LEN(MSGCHAR): MSGCHAR: msgKey:
+                              msgSubType: progName: ErrorCode);
+
+         // Crear y cargar la tabla temporal
+            Exec Sql
+            DECLARE GLOBAL TEMPORARY TABLE Temppassis (
+                tipo CHAR(1),
+                campo CHAR(30)
+            ) ON COMMIT PRESERVE ROWS;
+
+         // Chequeo de error para SQLCODE
+          If SQLCODE < 0;
+             MSGCHAR = 'Error al crear tabla Temppassis. SQLCODE: ' +
+             %char(SQLCODE);
+             msgType = '*ESCAPE';
+             CALLP(E) QMHSNDPM (msgID: callStack: msgType: %LEN(MSGCHAR):
+                       MSGCHAR: msgKey: msgSubType: progName: ErrorCode);
+            w_Respuesta = 'ERROR';
+            Return; // Finaliza el procedimiento si ocurre un error
+         EndIf;
+
+         // Monitorea el valor de w_Respuesta después de la creación de la tabla
+          MSGCHAR = 'Valor de w_Respuesta después de tabla temporal: ' +
+          w_Respuesta;
+          CALLP(E) QMHSNDPM(msgID : callStack : msgType : %LEN(MSGCHAR) :
+                   MSGCHAR : msgKey : msgSubType : progName : ErrorCode);
+
+         // Insertar datos en la tabla temporal Temppassis
+         Exec Sql  INSERT INTO Temppassis
+                   SELECT SUBSTR(psvalor, 1, 1) AS tipo,
+                          TRIM(SUBSTR(psvalor, 2, 30)) AS campo
+                   FROM   adqffpasis
+                   WHERE  PSPARAM = TRIM(:wjob)
+                   AND    psconsec = 7;
+
+         // Chequeo de error para SQLCODE después de la inserción
+         If SQLCODE < 0;
+             MSGCHAR = 'Error al insertar en Temppassis. SQLCODE: ' +
+             %char(SQLCODE);
+             msgType = '*ESCAPE';
+             CALLP(E) QMHSNDPM (msgID: callStack: msgType: %LEN(MSGCHAR):
+                        MSGCHAR: msgKey: msgSubType: progName: ErrorCode);
+            w_Respuesta = 'ERROR';
+            Return; // Finaliza el procedimiento si ocurre un error
+         EndIf;
+
+             MSGCHAR = 'Insertado en Temppassis correctamente';
+             msgType = '*INFO';
+             CALLP(E) QMHSNDPM (msgID: callStack: msgType: %LEN(MSGCHAR):
+                            MSGCHAR: msgKey: msgSubType: progName: ErrorCode);
+
+          //? Paso 1: Verifica si hay homologaciones y realiza inserción si no existen
+         Exec Sql
+         INSERT INTO ADQFFINCCO
+             (CODUNI, TIPOCAMBIO, TIPOMISION, DESCRIPCOM, VLRPORCENT,
+              VLRFIJO, DESCRIPINC, FECHA, HORA, TRABAJO)
+         SELECT
+             TCODUNI, 'COD', TTPCOMISION, TDESCRIPCOM, TVLRPORCENT, TVLRFIJO,
+             'No hay homologaciones para la novedad MDRxBIN',
+             VARCHAR_FORMAT(CURRENT TIMESTAMP, 'YYYYMMDD'),
+             INT(TIME(NOW())), :wtrabajo
+         FROM ADQTBMDRTR AS tr
+         LEFT JOIN ADQFFDWHTC AS dwh ON tr.TCODUNI = Trim(dwh.Merch_id)
+         LEFT JOIN ADQFFHOMCO AS h ON h.codsrvopy = dwh.sv_id_code
+         AND h.tiptrnopy = dwh.tran_type
+         AND h.tipsrvopy = dwh.srvc_type
+         AND h.areaevento = dwh.area_ofev
+         INNER JOIN TempPassis AS passis
+         ON h.tpcomision = passis.tipo AND h.srvbizagi = passis.campo
+         WHERE tr.TTPCOMISION = passis.tipo
+         AND tr.TDESCRIPCOM = passis.campo
+         AND tr.TCODUNI NOT IN (
+             SELECT Trim(dwh.Merch_id)
+             FROM ADQFFDWHTC AS dwh
+             WHERE EXISTS (
+                 SELECT 1
+                 FROM ADQFFHOMCO AS h
+                 WHERE h.codsrvopy = dwh.sv_id_code
+                 AND h.tiptrnopy = dwh.tran_type
+                 AND h.tipsrvopy = dwh.srvc_type
+                 AND h.areaevento = dwh.area_ofev
+             )
+         );
+
+       If sqlcod < 0;
+            // Captura el mensaje detallado del error SQL
+            Exec Sql
+               Get Diagnostics Condition 1 :wtxtsqlerr = MESSAGE_TEXT;
+
+            // Formatea y envía el mensaje de error mediante QMHSNDPM
+            MSGCHAR = 'Error: ' + %trim(wtxtsqlerr);
+            msgType = '*ESCAPE';
+            CALLP(E) QMHSNDPM (msgID: callStack: msgType: %LEN(MSGCHAR):
+                      MSGCHAR: msgKey: msgSubType: progName: ErrorCode);
+
+            // Asigna valores de error adicionales y llama a Pr_EscribirError
+            w_Error = 'NH';
+            Pr_EscribirError();
+            w_Respuesta = 'ERROR';
+            Return;
+        EndIf;
+
+
+          //? Inserta registros cuando no hay REC_ID en MDRxBIN
+         Exec Sql
+         INSERT INTO ADQFFINCCO
+             (CODUNI, TIPOCAMBIO, TIPOMISION, DESCRIPCOM, VLRPORCENT,
+              VLRFIJO, DESCRIPINC, FECHA, HORA, TRABAJO)
+         SELECT
+             b.TCODUNI, 'COD', b.TTPCOMISION, b.TDESCRIPCOM, b.TVLRPORCENT,
+             b.TVLRFIJO,
+             'No hay REC_ID en MDRxBIN para: ' || TRIM(a.codsrvopy) || ',' ||
+             TRIM(a.tiptrnopy) || ',' || TRIM(a.tipsrvopy) || ',' ||
+             TRIM(a.areaevento),
+             VARCHAR_FORMAT(CURRENT TIMESTAMP, 'YYYYMMDD'), INT(TIME(NOW())),
+             :wtrabajo
+         FROM ADQFFHOMCO AS a
+         INNER JOIN ADQTBMDRTR AS b
+         ON a.tpcomision = b.TTPCOMISION AND a.srvbizagi = b.TDESCRIPCOM
+         LEFT JOIN ADQFFDWHTC AS dwh
+         ON a.codsrvopy = dwh.sv_id_code AND a.tiptrnopy = dwh.tran_type
+         AND a.tipsrvopy = dwh.srvc_type AND a.areaevento = dwh.area_ofev
+         AND b.TCODUNI = TRIM(dwh.Merch_ID)
+         INNER JOIN TempPassis AS passis
+         ON a.tpcomision = passis.tipo AND a.srvbizagi = passis.campo
+         WHERE b.TTPCOMISION = passis.tipo
+         AND b.TDESCRIPCOM = passis.campo
+         AND (dwh.REC_ID IS NULL OR dwh.REC_ID = ' ');
+
+       If sqlcod < 0;
+            // Captura el mensaje detallado del error SQL
+            Exec Sql
+               Get Diagnostics Condition 1 :wtxtsqlerr = MESSAGE_TEXT;
+
+            // Formatea y envía el mensaje de error mediante QMHSNDPM
+            MSGCHAR = 'Error: ' + %trim(wtxtsqlerr);
+            msgType = '*ESCAPE';
+            CALLP(E) QMHSNDPM (msgID: callStack: msgType: %LEN(MSGCHAR):
+                      MSGCHAR: msgKey: msgSubType: progName: ErrorCode);
+
+            // Asigna valores de error adicionales y llama a Pr_EscribirError
+            w_Error = 'NR';
+            Pr_EscribirError();
+            w_Respuesta = 'ERROR';
+            Return;
+       EndIf;
+
+         //? Inserta registros ADQFFNOVCO si no hay REC_ID para la homologación
+       Exec Sql
+         INSERT INTO ADQFFNOVCO
+             (CODUNICO, RECID, VLRPORCENT, VLRFIJO)
+         SELECT
+             a.TCODUNI, dwh.REC_ID, a.TVLRPORCENT, a.TVLRFIJO
+         FROM ADQTBMDRTR AS a
+         LEFT JOIN ADQFFDWHTC AS dwh
+         ON a.TCODUNI = Trim(dwh.Merch_id)
+         AND a.TAREAEVENT = dwh.area_ofev
+         LEFT JOIN ADQFFHOMCO AS h
+         ON h.codsrvopy = dwh.sv_id_code
+         AND h.tiptrnopy = dwh.tran_type
+         AND h.tipsrvopy = dwh.srvc_type
+         AND h.areaevento = dwh.area_ofev
+         INNER JOIN TempPassis AS passis
+         ON h.tpcomision = passis.tipo AND h.srvbizagi = passis.campo
+         WHERE a.TTPCOMISION = passis.tipo
+         AND a.TDESCRIPCOM = passis.campo
+         AND dwh.REC_ID IS NOT NULL;
+
+        If sqlcod < 0;
+            // Captura el mensaje detallado del error SQL
+            Exec Sql
+               Get Diagnostics Condition 1 :wtxtsqlerr = MESSAGE_TEXT;
+
+            // Formatea y envía el mensaje de error mediante QMHSNDPM
+            MSGCHAR = 'Error: ' + %trim(wtxtsqlerr);
+            msgType = '*ESCAPE';
+            CALLP(E) QMHSNDPM (msgID: callStack: msgType: %LEN(MSGCHAR):
+                      MSGCHAR: msgKey: msgSubType: progName: ErrorCode);
+
+            // Asigna valores de error adicionales y llama a Pr_EscribirError
+            w_Error = 'GN';
+            Pr_EscribirError();
+            w_Respuesta = 'ERROR';
+            Return;
+        EndIf;
+
+             p_Respuesta = w_Respuesta;
+             MSGCHAR = 'Asignación final: p_Respuesta = ' + p_Respuesta;
+             CALLP(E) QMHSNDPM (msgID: callStack: msgType: %LEN(MSGCHAR):
+                   MSGCHAR: msgKey: msgSubType: progName: ErrorCode);
+
+         // Eliminación de la tabla temporal después del uso
+               Exec Sql DROP TABLE Temppassis;
+
+           // Comprobación del resultado de la eliminación de la tabla
+           If SQLCODE < 0;
+            MSGCHAR = 'Error: ' + %trim(wtxtsqlerr);
+            msgType = '*ESCAPE';
+            CALLP(E) QMHSNDPM (msgID: callStack: msgType: %LEN(MSGCHAR):
+                      MSGCHAR: msgKey: msgSubType: progName: ErrorCode);
+           Else;
+             MSGCHAR = 'Tabla Temppassis eliminada correctamente';
+             msgType = '*INFO';
+             CALLP(E) QMHSNDPM (msgID: callStack: msgType: %LEN(MSGCHAR):
+                       MSGCHAR: msgKey: msgSubType: progName: ErrorCode);
+           EndIf;
+
+             Return;
+        End-Proc Pr_AlgoritmoNuevo;
+
+         // Algoritmo llamado con la opcion 0 desde Passis
+         // Procedimiento para ejecutar la versión actual del algoritmo
+         Dcl-Proc Pr_AlgoritmoActual;
+             dcl-s wtipcomi char(1);
+             dcl-s wvalcomis char(30);
+             dcl-s w_Error char(2) inz(*blanks);
+             dcl-s wtxtsqlerr char(100) inz(*blanks);
+             Dcl-s wsep Char(1) Inz(''''); // Declaración de wsep con comilla simple
+             Dcl-s wSql Char(1500) Inz(*Blanks); // Declaración de una variable de SQL
+             dcl-s wMensj2 char(80);
+             dcl-s i Zoned(2);
+             dcl-Ds v_deccom Qualified Dim(28);
+                 tipo char(1);
+                 campo char(30);
+             End-Ds;
+          //Cargue de datos al vector
+          v_deccom(1).tipo =  'P';
+          v_deccom(1).campo = 'AMX_CR_P';
+
+          v_deccom(2).tipo =  'P';
+          v_deccom(2).campo = 'AMX_INT_P';
+
+          v_deccom(3).tipo =  'P';
+          v_deccom(3).campo = 'CVN_CR_P';
+
+          v_deccom(4).tipo =  'P';
+          v_deccom(4).campo = 'CVN_DB_P';
+
+          v_deccom(5).tipo =  'P';
+          v_deccom(5).campo = 'CVN_ELE_P';
+
+          v_deccom(6).tipo =  'P';
+          v_deccom(6).campo = 'CVN_CR_INT_P';
+
+          v_deccom(7).tipo =  'P';
+          v_deccom(7).campo = 'CVN_DB_INT_P';
+
+          v_deccom(8).tipo =  'P';
+          v_deccom(8).campo = 'CVN_ELE_INT_P';
+
+          v_deccom(9).tipo =  'P';
+          v_deccom(9).campo = 'MCN_CR_P';
+
+          v_deccom(10).tipo =  'P';
+          v_deccom(10).campo = 'MCN_DB_P';
+
+          v_deccom(11).tipo =  'P';
+          v_deccom(11).campo = 'MCN_CR_INT_P';
+
+          v_deccom(12).tipo =  'P';
+          v_deccom(12).campo = 'MCN_DB_INT_P';
+
+          v_deccom(13).tipo =  'P';
+          v_deccom(13).campo = 'MCN_MA_P';
+
+          v_deccom(14).tipo =  'P';
+          v_deccom(14).campo = 'MCN_MA_INT_P';
+
+          v_deccom(15).tipo =  'F';
+          v_deccom(15).campo = 'AMX_CR_F';
+
+          v_deccom(16).tipo =  'F';
+          v_deccom(16).campo = 'AMX_INT_F';
+
+          v_deccom(17).tipo =  'F';
+          v_deccom(17).campo = 'CVN_CR_F';
+
+          v_deccom(18).tipo =  'F';
+          v_deccom(18).campo = 'CVN_DB_F';
+
+          v_deccom(19).tipo =  'F';
+          v_deccom(19).campo = 'CVN_ELE_F';
+
+          v_deccom(20).tipo =  'F';
+          v_deccom(20).campo = 'CVN_CR_INT_F';
+
+          v_deccom(21).tipo =  'F';
+          v_deccom(21).campo = 'CVN_DB_INT_F';
+
+          v_deccom(22).tipo =  'F';
+          v_deccom(22).campo = 'CVN_ELE_INT_F';
+
+          v_deccom(23).tipo =  'F';
+          v_deccom(23).campo = 'MCN_CR_F';
+
+          v_deccom(24).tipo =  'F';
+          v_deccom(24).campo = 'MCN_DB_F';
+
+          v_deccom(25).tipo =  'F';
+          v_deccom(25).campo = 'MCN_CR_INT_F';
+
+          v_deccom(26).tipo =  'F';
+          v_deccom(26).campo = 'MCN_DB_INT_F';
+
+          v_deccom(27).tipo =  'F';
+          v_deccom(27).campo = 'MCN_MA_F';
+
+          v_deccom(28).tipo =  'F';
+          v_deccom(28).campo = 'MCN_MA_INT_F';
+
+
+          For i= 1 to 28;
+
+             //No hay homologaciones para la novedad
+             Clear wSQL;
+             wtipcomi = v_deccom(i).tipo;
+             wvalcomis = v_deccom(i).campo;
+             wMensj = 'No hay homologaciones para la novedad MDRxBIN';
+
+            wSql = 'Insert into ADQFFINCCO ( ' + 'Select TCODUNI,' +
+               wsep + 'COD' + wsep + ',TTPCOMISION,' +
+               'TDESCRIPCOM,TVLRPORCENT,TVLRFIJO,' + wsep + wMensj +
+               wsep + ',VARCHAR_FORMAT(CURRENT TIMESTAMP,' + wsep +
+               'YYYYMMDD' + wsep + '),INT(TIME(NOW())), ' + wsep +
+               wtrabajo + wsep + ' From ADQTBMDRTR ' +
+               'WHERE TCODUNI Not In ( ' + 'Select Trim(dwh.Merch_id) ' +
+               'From ADQFFDWHTC as dwh inner join ' +
+               'ADQFFHOMCO as h on ' + 'h.codsrvopy  = dwh.sv_id_code ' +
+               'And h.tiptrnopy  = dwh.tran_type ' +
+               'And h.tipsrvopy  = dwh.srvc_type ' +
+               'And h.areaevento = dwh.area_ofev ' +
+               'Where h.tpcomision = ' + wsep + wtipcomi + wsep +
+               ' And h.srvbizagi  = ' + wsep + %Trim(wvalcomis) + wsep +
+               ') And TTPCOMISION = ' + wsep + wtipcomi + wsep +
+               ' And TDESCRIPCOM = ' + wsep + %Trim(wvalcomis) + wsep +
+               ')';
+
+             Exec Sql Execute Immediate :wSQL;
+
+             If sqlcod < 0;
+                Exec Sql
+                Get Diagnostics Condition 1 :wtxtsqlerr = MESSAGE_TEXT;
+                w_Error = 'NH';
+                Pr_EscribirError();
+                w_Respuesta = 'ERROR';
+             EndIf;
+          EndFor;
+
+          For i= 1 to 28;
+
+             //No hay REC_ID para la homologación
+             Clear wSQL;
+             wtipcomi = v_deccom(i).tipo;
+             wvalcomis = v_deccom(i).campo;
+             wMensj = 'No hay REC_ID en MDRxBIN para: ';
+             wMensj2 ='No hay homologaciones para la novedad MDRxBIN';
+
+             wSQL = 'Insert into ADQFFINCCO ( ' +
+                    'Select b.TCODUNI,' + wsep + 'COD' + wsep + ',' +
+                    wsep + wtipcomi + wsep + ',' + wsep + wvalcomis +
+                    wsep + ',b.TVLRPORCENT,b.TVLRFIJO,' + wsep +
+                     %Trim(wMensj) + wsep + '||Trim(A.codsrvopy)||' +
+                     wsep + ',' + wsep + '||Trim(A.tiptrnopy)||' +
+                    wsep + ',' + wsep + '||Trim(A.tipsrvopy)||' +
+                     wsep + ',' + wsep + '||Trim(A.areaevento),' +
+                     'VARCHAR_FORMAT(CURRENT TIMESTAMP,' + wsep + 'YYYYMMDD' +
+                    wsep + '),INT(TIME(NOW())),' + wsep + %Trim(wtrabajo) +
+                    wsep + ' From ADQFFHOMCO a Inner Join ADQTBMDRTR b On ' +
+                    'a.tpcomision = b.TTPCOMISION And ' +
+                    'a.srvbizagi  = b.TDESCRIPCOM ' +
+                    'Left Join ADQFFDWHTC c On ' +
+                    'a.codsrvopy = c.sv_id_code And ' +
+                    'a.tiptrnopy = c.tran_type  And ' +
+                    'a.tipsrvopy = c.srvc_type  And ' +
+                    'a.areaevento = c.area_ofev And ' +
+                    'b.TCODUNI = Trim(c.Merch_ID) ' +
+                    'Where a.tpcomision = ' + wsep + wtipcomi + wsep +
+                    ' And a.srvbizagi = ' + wsep + %Trim(wvalcomis) + wsep +
+                    ' And b.TCODUNI Not In (Select CODUNI From ADQFFINCCO ' +
+                    'Where Trim(DESCRIPINC) = ' + wsep + %Trim(wMensj2) + wsep +
+                    ' And TIPOMISION = ' + wsep + wtipcomi + wsep + ' And ' +
+                     'DESCRIPCOM = ' + wsep + %Trim(wvalcomis) + wsep + ') ' +
+                    'And (c.REC_ID is null Or c.REC_ID = ' + wsep +
+                    ' ' + wsep + '))';
+
+             Exec Sql Execute Immediate :wSQL;
+
+             If sqlcod < 0;
+                Exec Sql
+                Get Diagnostics Condition 1 :wtxtsqlerr = MESSAGE_TEXT;
+                w_Error = 'NR';
+                Pr_EscribirError();
+                w_Respuesta = 'ERROR';
+             EndIf;
+          EndFor;
+
+          For i= 1 to 28;
+
+             //Inserción registros Novedades ADQFFNOVCO
+             Clear wSQL;
+             wtipcomi = v_deccom(i).tipo;
+             wvalcomis = v_deccom(i).campo;
+
+             wSQL = 'Insert into ADQFFNOVCO ( ' +
+                    'Select a.TCODUNI,dwh.REC_ID,a.TVLRPORCENT,a.TVLRFIJO ' +
+                    'From ADQTBMDRTR as a Inner Join ADQFFDWHTC as dwh ' +
+                    'On a.TCODUNI = Trim(dwh.Merch_id) And  ' +
+                    'a.TAREAEVENT = dwh.area_ofev Inner Join ADQFFHOMCO h ' +
+                    'On h.codsrvopy  = dwh.sv_id_code ' +
+                    'And h.tiptrnopy  = dwh.tran_type ' +
+                    'And h.tipsrvopy  = dwh.srvc_type ' +
+                    'And h.areaevento = dwh.area_ofev ' +
+                    'Where h.tpcomision = ' + wsep + wtipcomi + wsep +
+                    ' And h.srvbizagi = ' + wsep + %Trim(wvalcomis) + wsep +
+                    ' And a.TTPCOMISION = ' + wsep + wtipcomi + wsep +
+                    ' And a.TDESCRIPCOM = ' + wsep + %Trim(wvalcomis) + wsep +
+                    ' And dwh.REC_ID <> ' + wsep + ' ' + wsep + ')';
+
+             Exec Sql Execute Immediate :wSQL;
+
+             If sqlcod < 0;
+                Exec Sql
+                Get Diagnostics Condition 1 :wtxtsqlerr = MESSAGE_TEXT;
+                w_Error = 'GN';
+                Pr_EscribirError();
+                w_Respuesta = 'ERROR';
+             EndIf;
+          EndFor;
+           p_Respuesta = w_Respuesta;
+           Return;
+         End-Proc Pr_AlgoritmoActual;
+
+         // Procedimiento para grabar en el Log ADQFFLOGADQ
+           Dcl-Proc Pr_EscribirError;
+             Dcl-s w_TpoMsg Char(10) Inz('*ERR');
+             Dcl-s w_Chkpnt Char(10) Inz(*Blanks);
+             Dcl-s w_Resp Char(2) Inz('ER'); // Indicador por defecto de error
+             Dcl-s w_Msg Char(10000) Inz(*Blanks);
+             dcl-s w_Error char(2) Inz(*Blanks);
+
+             // Selección del tipo de error basado en el valor de w_Error
+             Select;
+             When w_Error = 'NH';
+               w_Chkpnt = w_Error;
+               w_Msg = 'Error en ADQFFINCCO - No homologaciones. ' +
+                   'Tipo: ' + wtipcomi + ', Producto: ' + %Trim(wvalcomis) +
+                   '. Detalle: ' + wtxtsqlerr;
+
+             When w_Error = 'NR';
+                w_Chkpnt = w_Error;
+                w_Msg = 'Error en ADQFFINCCO - Validación REC_ID. ' +
+                   'Tipo: ' + wtipcomi + ', Producto: ' + %Trim(wvalcomis) +
+                         '. Detalle: ' + wtxtsqlerr;
+
+             When w_Error = 'GN';
+                w_Chkpnt = w_Error;
+                w_Msg = 'Error en ADQFFNOVCO - Inserción novedades. ' +
+                   'Tipo: ' + wtipcomi + ', Producto: ' + %Trim(wvalcomis) +
+                   ' Detalle: ' + wtxtsqlerr;
+
+             Other;
+                 w_Chkpnt = 'UN'; // Indica un error no especificado
+                 w_Msg = 'Error desconocido. Tipo: ' + wtipcomi +
+                         ', Producto: ' + %Trim(wvalcomis) +
+                         ' Detalle: ' + wtxtsqlerr;
+             EndSl;
+
+             // Asegura que el mensaje no exceda el tamaño del log
+             If %Len(w_Msg) > %Size(w_Msg);
+                 w_Msg = %Subst(w_Msg:1:%Size(w_Msg));
+             EndIf;
+
+             // Intenta grabar en el log y maneja posibles fallos
+             Monitor;
+                 ADQRLOGADQ(w_TpoMsg:w_Chkpnt:w_Resp:w_Msg);
+             On-Error;
+                 // Registrar cualquier error de log, si necesario.
+                 // Aquí podrías enviar un mensaje alternativo o registrar en otro log.
+             EndMon;
+
+             Return;
+         End-Proc;
+
+         // Procedimiento para obtener el valor de w_IndSQL
+         dcl-proc Pr_SwAlgoritmo;
+             dcl-pi Pr_SwAlgoritmo Char(1); // Definir interfaz
+             end-pi;
+             Dcl-s wpr_IndSQL Char(1) Inz('0');
+
+             Exec Sql
+             SELECT SUBSTR(PSVALOR, 1, 1)
+             INTO :wpr_IndSQL
+             FROM ADQFFPASIS
+             WHERE PSPARAM = TRIM(:wjob)
+             AND PSCONSEC = 5;
+
+         If SQLCODE = 0;  // Éxito: se encontró el valor
+            MSGCHAR = 'Indicador algoritmo SQL encontrado: ' +
+            %trim(wpr_IndSQL);
+            msgType = '*INFO';
+             CALLP(E) QMHSNDPM (msgID: callStack: msgType: %LEN(MSGCHAR):
+                       MSGCHAR: msgKey: msgSubType: progName: ErrorCode);
+         Elseif SQLCODE = 100;  // No se encontraron filas
+            MSGCHAR = 'Indicador algoritmo SQL no definido. SQLCODE: ' +
+                      %char(SQLCODE_W);
+            msgType = '*INFO';
+             CALLP(E) QMHSNDPM (msgID: callStack: msgType: %LEN(MSGCHAR):
+                       MSGCHAR: msgKey: msgSubType: progName: ErrorCode);
+            wpr_IndSQL = '0';
+         Else;  // Otros errores
+            MSGCHAR = 'Error en consulta SQL. SQLCODE: ' + %char(SQLCODE_W);
+            msgType = '*INFO';
+             CALLP(E) QMHSNDPM (msgID: callStack: msgType: %LEN(MSGCHAR):
+                       MSGCHAR: msgKey: msgSubType: progName: ErrorCode);
+            wpr_IndSQL = '0';
+         EndIf;
+
+             Return wpr_IndSQL;
+         end-proc; 
